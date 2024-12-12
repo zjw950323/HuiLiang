@@ -1,18 +1,19 @@
-import os
-import uuid
 import datetime
+import os
+import random
+import string
+from io import BytesIO
+
 import mysql.connector
 import requests
-from flask import Flask, request, jsonify
-from werkzeug.utils import secure_filename
-from io import BytesIO
 from PIL import Image
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 # 设置上传文件的存储路径
-# UPLOAD_FOLDER = '/usr/share/nginx/html/pic/'
-UPLOAD_FOLDER = '/Users/muse/uploads/'
+UPLOAD_FOLDER = '/usr/share/nginx/html/pic/'
+# UPLOAD_FOLDER = '/Users/muse/uploads/'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
@@ -63,6 +64,7 @@ def generate_image(description):
 
     if response.status_code == 200:
         response_json = response.json()
+        print(response_json['data'][0]['url'])
         return response_json['data'][0]['url']
     else:
         raise Exception(f"Failed to generate image. Status code: {response.status_code}, Response: {response.text}")
@@ -73,12 +75,17 @@ def upload_image(image_url, description):
     image_response = requests.get(image_url)
     image = Image.open(BytesIO(image_response.content))
 
-    # 获取文件扩展名
-    file_extension = image_url.split('.')[-1]
+    # 获取当前时间并格式化为年月日时分秒
+    current_time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 
-    # 将图片保存到服务器指定目录
-    filename = f"{description[:10]}_{str(uuid.uuid4().hex[:6])}.png"
+    # 生成一个10位的随机数字符串，包括0-9和a-z
+    random_str = ''.join(random.choices(string.digits + string.ascii_lowercase, k=10))
+
+    # 创建图片文件名
+    filename = f"image_{current_time}_{random_str}.png"
     filepath = os.path.join(UPLOAD_FOLDER, filename)
+
+    # 保存图片
     image.save(filepath)
 
     # 返回保存的文件路径
@@ -86,11 +93,11 @@ def upload_image(image_url, description):
 
 
 # 将图片信息存储到数据库
-def save_image_to_db(description, image_name, image_path):
+def save_image_to_db(description, image_name, image_path, image_url):
     conn = get_db_connection()
     cursor = conn.cursor()
-    query = "INSERT INTO {} (description, image_name, image_path) VALUES (%s, %s, %s)".format(DB_TABLE)
-    cursor.execute(query, (description, image_name, image_path))
+    query = f"INSERT INTO {DB_TABLE} (description, image_name, image_path, image_url) VALUES (%s, %s, %s, %s)"
+    cursor.execute(query, (description, image_name, image_path, image_url))
     conn.commit()
     conn.close()
 
@@ -103,11 +110,14 @@ def get_image_by_description():
     if not description:
         return jsonify({"error": "No description provided"}), 400
 
+    # 将description分成多个字节，每个字节前加上"%"符号
+    encoded_description = '%'.join(description)
+    print(encoded_description)
     # 查询数据库是否已有匹配的图片
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
-    query = "SELECT image_name, image_path FROM {} WHERE description LIKE %s".format(DB_TABLE)
-    cursor.execute(query, ('%' + description + '%',))
+    query = "SELECT image_name, image_path, image_url, description FROM {} WHERE description LIKE %s".format(DB_TABLE)
+    cursor.execute(query, ('%' + encoded_description + '%',))
     result = cursor.fetchall()
     conn.close()
 
@@ -116,14 +126,14 @@ def get_image_by_description():
     else:
         # 如果没有匹配的图片，调用 Let's API 生成一张图片
         image_url = generate_image(description)
-        image_name = f"{description[:10]}_generated.png"  # 生成一个图片名称
+        image_name = f"image_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{''.join(random.choices(string.digits + string.ascii_lowercase, k=10))}.png"
         image_path = upload_image(image_url, description)
 
         # 将生成的图片信息保存到数据库
-        save_image_to_db(description, image_name, image_path)
+        save_image_to_db(description, image_name, image_path, image_url)
 
         return jsonify(
-            {"code": 200, "data": [{"image_name": image_name, "image_path": image_path}]}
+            {"code": 200, "data": [{"image_name": image_name, "image_path": image_path, "image_url": image_url, "description": description}]}
         ), 200
 
 
@@ -132,4 +142,5 @@ if __name__ == '__main__':
     if not os.path.exists(UPLOAD_FOLDER):
         os.makedirs(UPLOAD_FOLDER)
 
-    app.run(host='0.0.0.0', port=5000)
+    # app.run(host='0.0.0.0', port=5000)
+    app.run(host='121.40.43.143', port=5000)
