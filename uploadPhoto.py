@@ -46,18 +46,20 @@ def allowed_file(filename):
 
 
 # 使用 Let's API 生成图片
-def generate_image(description):
+def generate_image(model, size, description):
     headers = {
         'Authorization': f'Bearer {LET_API_KEY}',
         'Content-Type': 'application/json',
         'Accept': 'application/json'
     }
-
+    print(model)
+    print(size)
+    print(description)
     data = {
         'prompt': description,
         'n': 1,
-        'size': '1024x1024',
-        'model': 'dall-e-3'
+        'size': size,
+        'model': model
     }
 
     response = requests.post(LET_API_URL, headers=headers, json=data)
@@ -71,7 +73,7 @@ def generate_image(description):
 
 
 # 上传图片到服务器的指定目录并获取存储地址
-def upload_image(image_url, description):
+def upload_image(image_url):
     image_response = requests.get(image_url)
     image = Image.open(BytesIO(image_response.content))
 
@@ -93,11 +95,11 @@ def upload_image(image_url, description):
 
 
 # 将图片信息存储到数据库
-def save_image_to_db(description, image_name, image_path, image_url):
+def save_image_to_db(image_name, image_path, image_url, image_model, image_size, image_description):
     conn = get_db_connection()
     cursor = conn.cursor()
-    query = f"INSERT INTO {DB_TABLE} (description, image_name, image_path, image_url) VALUES (%s, %s, %s, %s)"
-    cursor.execute(query, (description, image_name, image_path, image_url))
+    query = f"INSERT INTO {DB_TABLE} (image_name, image_path, image_url,image_model, image_size,  image_description) VALUES (%s, %s, %s, %s, %s, %s)"
+    cursor.execute(query, (image_name, image_path, image_url, image_model, image_size, image_description))
     conn.commit()
     conn.close()
 
@@ -105,19 +107,25 @@ def save_image_to_db(description, image_name, image_path, image_url):
 # 对外提供的接口，查询数据库是否已有匹配的图片
 @app.route('/get_image', methods=['GET'])
 def get_image_by_description():
+    model = request.args.get('model', '')
+    size = request.args.get('size', '')
     description = request.args.get('description', '')
 
+    if not model:
+        return jsonify({"error": "No model provided"}), 400
+    if not size:
+        return jsonify({"error": "No size provided"}), 400
     if not description:
         return jsonify({"error": "No description provided"}), 400
 
     # 将description分成多个字节，每个字节前加上"%"符号
     encoded_description = '%'.join(description)
-    print(encoded_description)
     # 查询数据库是否已有匹配的图片
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
-    query = "SELECT image_name, image_path, image_url, description FROM {} WHERE description LIKE %s".format(DB_TABLE)
-    cursor.execute(query, ('%' + encoded_description + '%',))
+    query = "SELECT image_name, image_path, image_url, image_model, image_size,  image_description FROM {} WHERE image_description LIKE %s  AND image_model = %s  AND image_size = %s".format(
+        DB_TABLE)
+    cursor.execute(query, ('%' + encoded_description + '%', model, size))
     result = cursor.fetchall()
     conn.close()
 
@@ -125,16 +133,47 @@ def get_image_by_description():
         return jsonify({"code": 200, "data": result}), 200
     else:
         # 如果没有匹配的图片，调用 Let's API 生成一张图片
-        image_url = generate_image(description)
+        image_url = generate_image(model, size, description)
         image_name = f"image_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{''.join(random.choices(string.digits + string.ascii_lowercase, k=10))}.png"
-        image_path = upload_image(image_url, description)
+        image_path = upload_image(image_url)
 
         # 将生成的图片信息保存到数据库
-        save_image_to_db(description, image_name, image_path, image_url)
+        save_image_to_db(image_name, image_path, image_url, model, size, description)
 
         return jsonify(
-            {"code": 200, "data": [{"image_name": image_name, "image_path": image_path, "image_url": image_url, "description": description}]}
+            {"code": 200, "data": [
+                {"image_name": image_name, "image_path": image_path, "image_url": image_url, "image_model": model,
+                 "image_size": size, "image_description": description}]}
         ), 200
+
+
+# 对外提供的接口，调用 Let's API 生成一张图片
+@app.route('/get_image_generate', methods=['GET'])
+def get_image_generate():
+    model = request.args.get('model', '')
+    size = request.args.get('size', '')
+    description = request.args.get('description', '')
+
+    if not model:
+        return jsonify({"error": "No model provided"}), 400
+    if not size:
+        return jsonify({"error": "No size provided"}), 400
+    if not description:
+        return jsonify({"error": "No description provided"}), 400
+
+    # 如果没有匹配的图片，调用 Let's API 生成一张图片
+    image_url = generate_image(model, size, description)
+    image_name = f"image_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{''.join(random.choices(string.digits + string.ascii_lowercase, k=10))}.png"
+    image_path = upload_image(image_url)
+
+    # 将生成的图片信息保存到数据库
+    save_image_to_db(image_name, image_path, image_url, model, size, description)
+
+    return jsonify(
+        {"code": 200, "data": [
+            {"image_name": image_name, "image_path": image_path, "image_url": image_url, "image_model": model,
+             "image_size": size, "image_description": description}]}
+    ), 200
 
 
 if __name__ == '__main__':
