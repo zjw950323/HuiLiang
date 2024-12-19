@@ -27,6 +27,7 @@ DB_USER = 'root'
 DB_PASSWORD = '*Huiliang2024'
 DB_NAME = 'HuiLiang'
 DB_TABLE = 'ai_pic'
+DB_VERSION_TABLE = 'version_control'  # 假设你有一个保存版本信息的表
 
 
 # 获取数据库连接
@@ -73,18 +74,11 @@ def generate_image(model, size, description):
 
 
 # 上传图片到服务器的指定目录并获取存储地址
-def upload_image(image_url):
+def upload_image(image_url, image_name):
     image_response = requests.get(image_url)
     image = Image.open(BytesIO(image_response.content))
 
-    # 获取当前时间并格式化为年月日时分秒
-    current_time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-
-    # 生成一个10位的随机数字符串，包括0-9和a-z
-    random_str = ''.join(random.choices(string.digits + string.ascii_lowercase, k=10))
-
-    # 创建图片文件名
-    filename = f"image_{current_time}_{random_str}.png"
+    filename = image_name
     filepath = os.path.join(UPLOAD_FOLDER, filename)
 
     # 保存图片
@@ -95,13 +89,37 @@ def upload_image(image_url):
 
 
 # 将图片信息存储到数据库
-def save_image_to_db(image_name, image_path, image_url, image_model, image_size, image_description):
+def save_image_to_db(image_name, image_path,  image_model, image_size, image_description):
     conn = get_db_connection()
     cursor = conn.cursor()
-    query = f"INSERT INTO {DB_TABLE} (image_name, image_path, image_url,image_model, image_size,  image_description) VALUES (%s, %s, %s, %s, %s, %s)"
-    cursor.execute(query, (image_name, image_path, image_url, image_model, image_size, image_description))
+    query = f"INSERT INTO {DB_TABLE} (image_name, image_path,  image_model, image_size, image_description) VALUES (%s, %s, %s, %s, %s)"
+    cursor.execute(query, (image_name, image_path,  image_model, image_size, image_description))
     conn.commit()
     conn.close()
+
+
+# 查询最新版本信息的接口
+@app.route('/get_latest_version', methods=['GET'])
+def get_latest_version():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # 获取最新的版本信息
+    query = f"SELECT version_number, update_description, create_time, update_time, is_force_update, update_url FROM {DB_VERSION_TABLE} ORDER BY update_time DESC LIMIT 1"
+    cursor.execute(query)
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        return jsonify({
+            "code": 200,
+            "data": result
+        }), 200
+    else:
+        return jsonify({
+            "code": 404,
+            "message": "No version information found."
+        }), 404
 
 
 # 对外提供的接口，查询数据库是否已有匹配的图片
@@ -123,7 +141,7 @@ def get_image_by_description():
     # 查询数据库是否已有匹配的图片
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
-    query = "SELECT image_name, image_path, image_url, image_model, image_size,  image_description FROM {} WHERE image_description LIKE %s  AND image_model = %s  AND image_size = %s".format(
+    query = "SELECT image_name, image_model, image_size, image_description FROM {} WHERE image_description LIKE %s AND image_model = %s AND image_size = %s".format(
         DB_TABLE)
     cursor.execute(query, ('%' + encoded_description + '%', model, size))
     result = cursor.fetchall()
@@ -135,16 +153,14 @@ def get_image_by_description():
         # 如果没有匹配的图片，调用 Let's API 生成一张图片
         image_url = generate_image(model, size, description)
         image_name = f"image_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{''.join(random.choices(string.digits + string.ascii_lowercase, k=10))}.png"
-        image_path = upload_image(image_url)
+        image_path = upload_image(image_url, image_name)
 
         # 将生成的图片信息保存到数据库
-        save_image_to_db(image_name, image_path, image_url, model, size, description)
+        save_image_to_db(image_name, image_path, model, size, description)
 
-        return jsonify(
-            {"code": 200, "data": [
-                {"image_name": image_name, "image_path": image_path, "image_url": image_url, "image_model": model,
-                 "image_size": size, "image_description": description}]}
-        ), 200
+        return jsonify({"code": 200, "data": [
+            {"image_name": image_name, "image_model": model,
+             "image_size": size, "image_description": description}]}), 200
 
 
 # 对外提供的接口，调用 Let's API 生成一张图片
@@ -164,16 +180,14 @@ def get_image_generate():
     # 如果没有匹配的图片，调用 Let's API 生成一张图片
     image_url = generate_image(model, size, description)
     image_name = f"image_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{''.join(random.choices(string.digits + string.ascii_lowercase, k=10))}.png"
-    image_path = upload_image(image_url)
+    image_path = upload_image(image_url, image_name)
 
     # 将生成的图片信息保存到数据库
-    save_image_to_db(image_name, image_path, image_url, model, size, description)
+    save_image_to_db(image_name, image_path, model, size, description)
 
-    return jsonify(
-        {"code": 200, "data": [
-            {"image_name": image_name, "image_path": image_path, "image_url": image_url, "image_model": model,
-             "image_size": size, "image_description": description}]}
-    ), 200
+    return jsonify({"code": 200, "data": [
+        {"image_name": image_name,  "image_model": model,
+         "image_size": size, "image_description": description}]}), 200
 
 
 if __name__ == '__main__':
